@@ -1,675 +1,1093 @@
-name: Build Pure C# Tinyverse Android APK (.NET 8 + Godot 4 C#)
-​on:
-push:
-branches: [ "main", "master" ]
-workflow_dispatch:
-​env:
-GODOT_VERSION: "4.3"
-​jobs:
-compile-csharp-apk:
-name: Compile C# (.NET 8) to Native Android ARM64 APK
-runs-on: ubuntu-latest
-​steps:
-- name: 1. Checkout C# Repository
-uses: actions/checkout@v4
-​- name: 2. Install Microsoft .NET 8.0 C# SDK
-uses: actions/setup-dotnet@v4
-with:
-dotnet-version: '8.0.x'
-​- name: 3. Install JDK 17
-uses: actions/setup-java@v4
-with:
-distribution: 'temurin'
-java-version: '17'
-​- name: 4. Auto-Setup All C# Project Files (Self-Contained)
-run: |
-mkdir -p Scripts/Core build
-​cat << 'EOF' > TinyverseCSharp.csproj
-<Project Sdk="Godot.NET.Sdk/4.3.0">
-<PropertyGroup>
-<TargetFramework>net8.0</TargetFramework>
-<EnableDynamicLoading>true</EnableDynamicLoading>
-<Nullable>disable</Nullable>
-<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-<Optimize>true</Optimize>
-</PropertyGroup>
-</Project>
-EOF
-​cat << 'EOF' > project.godot
-config_version=5
-​[application]
-config/name="Tinyverse C# Cosmos Simulator"
-run/main_scene="res://MainCosmos.tscn"
-config/features=PackedStringArray("4.3", "C#", "Mobile")
-​[display]
-window/size/viewport_width=1920
-window/size/viewport_height=1080
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
-window/handheld/orientation=4
-​[dotnet]
-project/assembly_name="TinyverseCSharp"
-​[input_devices]
-pointing/emulate_touch_from_mouse=true
-​[rendering]
-renderer/rendering_method="mobile"
-anti_aliasing/quality/msaa_3d=2
-EOF
-​cat << 'EOF' > MainCosmos.tscn
-[gd_scene load_steps=2 format=3 uid="uid://tinyverse_csharp_main"]
-​[ext_resource type="Script" path="res://Scripts/Core/TinyverseCSharpMain.cs" id="1_csmain"]
-​[node name="TinyverseRoot" type="Node3D"]
-script = ExtResource("1_csmain")
-EOF
-​cat << 'EOF' > export_presets.cfg
-[preset.0]
-name="Android"
-platform="Android"
-runnable=true
-dedicated_server=false
-custom_features=""
-export_filter="all_resources"
-include_filter=""
-exclude_filter=""
-export_path="build/Tinyverse-CSharp-ARM64.apk"
-encryption_include_filters=""
-encryption_exclude_filters=""
-encrypt_pck=false
-encrypt_directory=false
-​[preset.0.options]
-custom_template/debug=""
-custom_template/release=""
-gradle_build/use_gradle_build=false
-architectures/armeabi-v7a=false
-architectures/arm64-v8a=true
-architectures/x86=false
-architectures/x86_64=false
-package/unique_name="com.tinyverse.csharpcosmos"
-package/name="Tinyverse C#"
-package/signed=true
-xr_features/xr_mode=0
-screen/immersive_mode=true
-EOF
-​- name: 5. Generate C# 64-Bit Cosmic Engine Source Files
-run: |
-cat << 'EOF' > Scripts/Core/Vector3d.cs
-using System;
-using Godot;
-​namespace TinyverseCSharp.Core
-{
-public struct Vector3d
-{
-public double X;
-public double Y;
-public double Z;
-​public Vector3d(double x, double y, double z)
-{
-X = x;
-Y = y;
-Z = z;
-}
-​public static Vector3d Zero => new Vector3d(0, 0, 0);
-public double Length => Math.Sqrt(X * X + Y * Y + Z * Z);
-public Vector3 ToVector3() => new Vector3((float)X, (float)Y, (float)Z);
-​public static Vector3d Lerp(Vector3d a, Vector3d b, double t)
-{
-t = Math.Clamp(t, 0.0, 1.0);
-return new Vector3d(
-a.X + (b.X - a.X) * t,
-a.Y + (b.Y - a.Y) * t,
-a.Z + (b.Z - a.Z) * t
-);
-}
-​public static Vector3d operator +(Vector3d a, Vector3d b) => new Vector3d(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
-public static Vector3d operator -(Vector3d a, Vector3d b) => new Vector3d(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
-public static Vector3d operator *(Vector3d a, double s) => new Vector3d(a.X * s, a.Y * s, a.Z * s);
-}
-}
-EOF
-​cat << 'EOF' > Scripts/Core/TinyverseCSharpMain.cs
-using System;
-using System.Collections.Generic;
-using Godot;
-​namespace TinyverseCSharp.Core
-{
-public partial class TinyverseCSharpMain : Node3D
-{
-public enum CosmicTier { Multiverse, Universe, Galaxy, StarSystem, BlackHole, Planet, PlanetarySurface }
-​public class CosmicBodyNode
-{
-public string Id;
-public string Name;
-public string Subtitle;
-public CosmicTier Tier;
-public Vector3d LocalPos;
-public float Radius;
-public float OrbitRadius;
-public float OrbitSpeed;
-public float OrbitAngle;
-public Color PrimaryColor;
-public Color SecondaryColor;
-public string TelemetrySummary;
-public Node3D VisualNode;
-public CosmicBodyNode Parent;
-public List<CosmicBodyNode> Children = new List<CosmicBodyNode>();
-}
-​private Camera3D _camera;
-private Node3D _multiverseLayer;
-private Node3D _universeLayer;
-private Node3D _galaxyLayer;
-private Node3D _systemLayer;
-private Node3D _surfaceLayer;
-​private Vector3d _targetPos64 = Vector3d.Zero;
-private Vector3d _currentLookAt64 = Vector3d.Zero;
-private double _camRadius = 680.0;
-private double _targetCamRadius = 680.0;
-private float _theta = 0.45f;
-private float _phi = 1.18f;
-private float _targetTheta = 0.45f;
-private float _targetPhi = 1.18f;
-​private bool _simRunning = true;
-private float _simSpeed = 1.0f;
-private CosmicBodyNode _rootNode;
-private CosmicBodyNode _focusedNode;
-private readonly Dictionary<string, CosmicBodyNode> _nodeIndex = new Dictionary<string, CosmicBodyNode>();
-private readonly List<CosmicBodyNode> _orbitingBodies = new List<CosmicBodyNode>();
-​private bool _isDragging = false;
-private readonly Dictionary<int, Vector2> _activeTouches = new Dictionary<int, Vector2>();
-private float _lastPinchDist = 0f;
-​private Label _tierBadgeLabel;
-private Label _telemetryTitleLabel;
-private Label _telemetryBodyLabel;
-private VBoxContainer _outlinerListContainer;
-private Button _playPauseButton;
-​public override void _Ready()
-{
-SetupEnvironmentAndCamera();
-BuildCosmicDatabase();
-Build3DLayers();
-BuildFuturisticHudUI();
-FocusOnBody(_rootNode, 680.0);
-}
-​private void SetupEnvironmentAndCamera()
-{
-var worldEnv = new WorldEnvironment();
-worldEnv.Environment = new Godot.Environment
-{
-BackgroundMode = Godot.Environment.BGMode.Color,
-BackgroundColor = new Color(0.008f, 0.015f, 0.04f),
-AmbientLightSource = Godot.Environment.AmbientSource.Color,
-AmbientLightColor = new Color(0.22f, 0.28f, 0.40f),
-AmbientLightEnergy = 0.9f
-};
-AddChild(worldEnv);
-​_camera = new Camera3D { Fov = 55f, Near = 0.05f, Far = 8000f };
-AddChild(_camera);
-​var light = new DirectionalLight3D { LightEnergy = 2.2f };
-light.RotationDegrees = new Vector3(-25f, 35f, 0f);
-AddChild(light);
-​_multiverseLayer = new Node3D();
-_universeLayer = new Node3D();
-_galaxyLayer = new Node3D();
-_systemLayer = new Node3D();
-_surfaceLayer = new Node3D();
-AddChild(_multiverseLayer);
-AddChild(_universeLayer);
-AddChild(_galaxyLayer);
-AddChild(_systemLayer);
-AddChild(_surfaceLayer);
-}
-​private void BuildCosmicDatabase()
-{
-_rootNode = new CosmicBodyNode
-{
-Id = "multiverse_root",
-Name = "The Omni-Multiverse Bulk",
-Subtitle = "Higher-Dimensional Inflationary Manifold",
-Tier = CosmicTier.Multiverse,
-Radius = 400f,
-PrimaryColor = new Color(0.22f, 0.74f, 0.97f),
-TelemetrySummary = "STATUS: HYPOTHETICAL COSMOLOGY\nSelect any Universe on the left outliner or pinch/scroll to zoom seamlessly across the cosmos."
-};
-RegisterBody(_rootNode, null);
-​var uniAlpha = new CosmicBodyNode
-{
-Id = "uni_alpha",
-Name = "Universe Alpha-1 (Lambda-CDM)",
-Subtitle = "Standard Relativistic Universe",
-Tier = CosmicTier.Universe,
-LocalPos = new Vector3d(-220, 20, 40),
-Radius = 85f,
-PrimaryColor = new Color(0.22f, 0.74f, 0.97f),
-SecondaryColor = new Color(0.51f, 0.55f, 0.97f),
-TelemetrySummary = "STATUS: EMPIRICAL SCIENCE\nDiameter: 93.0 Billion ly\nAge: 13.787 Billion Years\nCMB Temp: 2.725 K"
-};
-RegisterBody(uniAlpha, _rootNode);
-​var uniHyperion = new CosmicBodyNode
-{
-Id = "uni_hyperion",
-Name = "Universe Hyperion-9 (High-G)",
-Subtitle = "Hypothetical High-Gravity Cosmos",
-Tier = CosmicTier.Universe,
-LocalPos = new Vector3d(20, 95, -210),
-Radius = 80f,
-PrimaryColor = new Color(0.96f, 0.62f, 0.04f),
-SecondaryColor = new Color(0.93f, 0.28f, 0.60f),
-TelemetrySummary = "STATUS: HYPOTHETICAL SIMULATION\nDiameter: 41.5 Billion ly\nPhysics: G = 2.8x Standard"
-};
-RegisterBody(uniHyperion, _rootNode);
-​var uniChronos = new CosmicBodyNode
-{
-Id = "uni_chronos",
-Name = "Universe Chronos-Zero",
-Subtitle = "Late-Epoch Red Dwarf Cosmos",
-Tier = CosmicTier.Universe,
-LocalPos = new Vector3d(220, -40, 60),
-Radius = 82f,
-PrimaryColor = new Color(0.66f, 0.33f, 0.97f),
-SecondaryColor = new Color(0.18f, 0.83f, 0.75f),
-TelemetrySummary = "STATUS: HYPOTHETICAL SIMULATION\nAge: 42.0 Billion Years\nDominated by M-dwarf stars & planetary nebulae."
-};
-RegisterBody(uniChronos, _rootNode);
-​var galMilkyWay = new CosmicBodyNode
-{
-Id = "gal_milky_way",
-Name = "Milky Way Galaxy",
-Subtitle = "Barred Spiral Galaxy (SBbc)",
-Tier = CosmicTier.Galaxy,
-LocalPos = new Vector3d(-32, 5, 14),
-Radius = 25f,
-PrimaryColor = new Color(0.38f, 0.65f, 0.98f),
-SecondaryColor = new Color(1.0f, 0.94f, 0.75f),
-TelemetrySummary = "STATUS: EMPIRICAL SCIENCE\nDiameter: 105,700 Light-Years\nMass: 1.5 x 10^12 Solar Masses\nStars: 100–400 Billion"
-};
-RegisterBody(galMilkyWay, uniAlpha);
-​var bhSgrA = new CosmicBodyNode
-{
-Id = "bh_sgr_a",
-Name = "Sagittarius A* (SMBH)",
-Subtitle = "Supermassive Black Hole",
-Tier = CosmicTier.BlackHole,
-LocalPos = new Vector3d(0, 0, 0),
-Radius = 2.6f,
-PrimaryColor = new Color(0.98f, 0.45f, 0.09f),
-SecondaryColor = new Color(1.0f, 0.97f, 0.92f),
-TelemetrySummary = "STATUS: EMPIRICAL SCIENCE\nMass: 4.297 x 10^6 Solar Masses\nNon-glowing Event Horizon + Relativistic Doppler Accretion Disk."
-};
-RegisterBody(bhSgrA, galMilkyWay);
-​var sysSol = new CosmicBodyNode
-{
-Id = "sys_sol",
-Name = "Sol System (Solar System)",
-Subtitle = "G2V Yellow Dwarf System",
-Tier = CosmicTier.StarSystem,
-LocalPos = new Vector3d(14, 1.5, 9),
-Radius = 3.2f,
-PrimaryColor = new Color(0.99f, 0.88f, 0.28f),
-SecondaryColor = new Color(0.98f, 0.45f, 0.09f),
-TelemetrySummary = "STATUS: EMPIRICAL SCIENCE\nStar Type: G2V Yellow Dwarf\nPhotosphere Temp: 5,772 K"
-};
-RegisterBody(sysSol, galMilkyWay);
-​var plEarth = new CosmicBodyNode
-{
-Id = "pl_earth",
-Name = "Earth (Terra)",
-Subtitle = "Rocky Ocean World",
-Tier = CosmicTier.Planet,
-Radius = 0.85f,
-OrbitRadius = 11.0f,
-OrbitSpeed = 0.55f,
-OrbitAngle = 0.8f,
-PrimaryColor = new Color(0.08f, 0.52f, 0.26f),
-SecondaryColor = new Color(0.02f, 0.42f, 0.68f),
-TelemetrySummary = "STATUS: EMPIRICAL SCIENCE\nDiameter: 12,742 km | Gravity: 9.807 m/s2\nOrbital Period: 365.256 Days"
-};
-RegisterBody(plEarth, sysSol);
-_orbitingBodies.Add(plEarth);
-​var plSaturn = new CosmicBodyNode
-{
-Id = "pl_saturn",
-Name = "Saturn (Kronos)",
-Subtitle = "Ringed Gas Giant",
-Tier = CosmicTier.Planet,
-Radius = 1.45f,
-OrbitRadius = 22.0f,
-OrbitSpeed = 0.20f,
-OrbitAngle = 4.9f,
-PrimaryColor = new Color(0.92f, 0.72f, 0.12f),
-SecondaryColor = new Color(0.99f, 0.94f, 0.60f),
-TelemetrySummary = "STATUS: EMPIRICAL SCIENCE\nDiameter: 116,460 km\nMass: 95.16 Earth Masses"
-};
-RegisterBody(plSaturn, sysSol);
-_orbitingBodies.Add(plSaturn);
-}
-​private void RegisterBody(CosmicBodyNode node, CosmicBodyNode parent)
-{
-node.Parent = parent;
-parent?.Children.Add(node);
-_nodeIndex[node.Id] = node;
-}
-​private void Build3DLayers()
-{
-foreach (var uni in _rootNode.Children)
-{
-var bubble = CreateGlowingSphere(uni.Radius, uni.PrimaryColor, true);
-bubble.Position = uni.LocalPos.ToVector3();
-_multiverseLayer.AddChild(bubble);
-uni.VisualNode = bubble;
-}
-​var alphaUni = _nodeIndex["uni_alpha"];
-foreach (var gal in alphaUni.Children)
-{
-var galNode = CreateGpuMultiMeshGalaxy(gal, 12000);
-galNode.Position = gal.LocalPos.ToVector3();
-_universeLayer.AddChild(galNode);
-gal.VisualNode = galNode;
-}
-​var mw = _nodeIndex["gal_milky_way"];
-_galaxyLayer.AddChild(CreateGpuMultiMeshGalaxy(mw, 18000));
-​foreach (var item in mw.Children)
-{
-Node3D marker = item.Tier == CosmicTier.BlackHole
-? CreateRelativisticBlackHoleNode(item.Radius)
-: CreateGlowingSphere(item.Radius * 0.6f, item.PrimaryColor, false);
-marker.Position = item.LocalPos.ToVector3();
-_galaxyLayer.AddChild(marker);
-}
-​var sol = _nodeIndex["sys_sol"];
-var sunMesh = CreateGlowingSphere(sol.Radius, sol.PrimaryColor, false);
-_systemLayer.AddChild(sunMesh);
-sol.VisualNode = sunMesh;
-​foreach (var pl in sol.Children)
-{
-var plGroup = new Node3D();
-var mi = new MeshInstance3D
-{
-Mesh = new SphereMesh { Radius = pl.Radius, Height = pl.Radius * 2f }
-};
-mi.MaterialOverride = new StandardMaterial3D { AlbedoColor = pl.PrimaryColor, Roughness = 0.65f };
-plGroup.AddChild(mi);
-_systemLayer.AddChild(plGroup);
-pl.VisualNode = plGroup;
-}
-​var terrain = new MeshInstance3D
-{
-Mesh = new PlaneMesh { Size = new Vector2(180f, 180f), SubdivideWidth = 64, SubdivideDepth = 64 }
-};
-terrain.MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color(0.10f, 0.52f, 0.28f) };
-_surfaceLayer.AddChild(terrain);
-}
-​private Node3D CreateGlowingSphere(float radius, Color color, bool translucent)
-{
-var root = new Node3D();
-var mi = new MeshInstance3D { Mesh = new SphereMesh { Radius = radius, Height = radius * 2f } };
-mi.MaterialOverride = new StandardMaterial3D
-{
-AlbedoColor = translucent ? new Color(color.R, color.G, color.B, 0.30f) : color,
-EmissionEnabled = true,
-Emission = color,
-EmissionEnergyMultiplier = translucent ? 1.2f : 2.4f,
-Transparency = translucent ? BaseMaterial3D.TransparencyEnum.Alpha : BaseMaterial3D.TransparencyEnum.Disabled
-};
-root.AddChild(mi);
-return root;
-}
-​private Node3D CreateRelativisticBlackHoleNode(float horizonRadius)
-{
-var bhRoot = new Node3D();
-var horizon = new MeshInstance3D { Mesh = new SphereMesh { Radius = horizonRadius, Height = horizonRadius * 2f } };
-horizon.MaterialOverride = new StandardMaterial3D { ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded, AlbedoColor = Colors.Black };
-bhRoot.AddChild(horizon);
-​var disk = new MeshInstance3D { Mesh = new TorusMesh { InnerRadius = horizonRadius * 1.35f, OuterRadius = horizonRadius * 4.2f } };
-disk.Scale = new Vector3(1f, 0.08f, 1f);
-disk.MaterialOverride = new StandardMaterial3D
-{
-AlbedoColor = new Color(1.0f, 0.55f, 0.12f),
-EmissionEnabled = true,
-Emission = new Color(1.0f, 0.48f, 0.08f),
-EmissionEnergyMultiplier = 3.0f
-};
-bhRoot.AddChild(disk);
-return bhRoot;
-}
-​private Node3D CreateGpuMultiMeshGalaxy(CosmicBodyNode gal, int starCount)
-{
-var container = new Node3D();
-var mmi = new MultiMeshInstance3D();
-var mm = new MultiMesh
-{
-TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
-UseColors = true,
-InstanceCount = starCount,
-Mesh = new BoxMesh { Size = new Vector3(0.24f, 0.24f, 0.24f) }
-};
-mmi.MaterialOverride = new StandardMaterial3D
-{
-ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-VertexColorUseAsAlbedo = true
-};
-​var rng = new Random(gal.Id.GetHashCode());
-float maxR = gal.Radius;
-for (int i = 0; i < starCount; i++)
-{
-float rNorm = Mathf.Pow((float)rng.NextDouble(), 1.35f);
-float r = rNorm * maxR;
-float angle = (i % 4) * (Mathf.Pi * 0.5f) + r * 0.26f + ((float)rng.NextDouble() - 0.5f) * 0.65f;
-float y = ((float)rng.NextDouble() - 0.5f) * (1f - rNorm * 0.75f) * maxR * 0.14f;
-mm.SetInstanceTransform(i, new Transform3D(Basis.Identity, new Vector3(Mathf.Cos(angle) * r, y, Mathf.Sin(angle) * r)));
-mm.SetInstanceColor(i, gal.SecondaryColor.Lerp(gal.PrimaryColor, rNorm));
-}
-mmi.Multimesh = mm;
-container.AddChild(mmi);
-return container;
-}
-​public override void _Input(InputEvent @event)
-{
-if (@event is InputEventScreenTouch touch)
-{
-if (touch.Pressed) _activeTouches[touch.Index] = touch.Position;
-else _activeTouches.Remove(touch.Index);
-_lastPinchDist = 0f;
-}
-else if (@event is InputEventScreenDrag drag)
-{
-_activeTouches[drag.Index] = drag.Position;
-if (_activeTouches.Count == 1)
-{
-_targetTheta -= drag.Relative.X * 0.006f;
-_targetPhi = Mathf.Clamp(_targetPhi - drag.Relative.Y * 0.006f, 0.12f, Mathf.Pi - 0.12f);
-}
-else if (_activeTouches.Count >= 2)
-{
-var pts = new List<Vector2>(_activeTouches.Values);
-float d = pts[0].DistanceTo(pts[1]);
-if (_lastPinchDist > 5f)
-{
-double ratio = _lastPinchDist / Mathf.Max(10f, d);
-_targetCamRadius = Math.Clamp(_targetCamRadius * ratio, 0.5, 2200.0);
-}
-_lastPinchDist = d;
-}
-}
-else if (@event is InputEventMouseButton mb)
-{
-if (mb.ButtonIndex == MouseButton.Left) _isDragging = mb.Pressed;
-else if (mb.ButtonIndex == MouseButton.WheelUp && mb.Pressed)
-_targetCamRadius = Math.Clamp(_targetCamRadius * 0.85, 0.5, 2200.0);
-else if (mb.ButtonIndex == MouseButton.WheelDown && mb.Pressed)
-_targetCamRadius = Math.Clamp(_targetCamRadius * 1.18, 0.5, 2200.0);
-}
-else if (@event is InputEventMouseMotion mm && _isDragging)
-{
-_targetTheta -= mm.Relative.X * 0.006f;
-_targetPhi = Mathf.Clamp(_targetPhi - mm.Relative.Y * 0.006f, 0.12f, Mathf.Pi - 0.12f);
-}
-}
-​public override void _Process(double delta)
-{
-float dt = (float)delta;
-if (_simRunning)
-{
-foreach (var pl in _orbitingBodies)
-{
-pl.OrbitAngle += pl.OrbitSpeed * dt * _simSpeed;
-if (pl.VisualNode != null)
-{
-pl.VisualNode.Position = new Vector3(
-Mathf.Cos(pl.OrbitAngle) * pl.OrbitRadius,
-0f,
-Mathf.Sin(pl.OrbitAngle) * pl.OrbitRadius
-);
-}
-}
-}
-​if (_focusedNode != null && _focusedNode.Tier == CosmicTier.Planet && _focusedNode.VisualNode != null)
-{
-Vector3 p = _focusedNode.VisualNode.GlobalPosition;
-_targetPos64 = new Vector3d(p.X, p.Y, p.Z);
-}
-​_camRadius += (_targetCamRadius - _camRadius) * Math.Min(1.0, delta * 8.0);
-_theta = Mathf.Lerp(_theta, _targetTheta, dt * 10f);
-_phi = Mathf.Lerp(_phi, _targetPhi, dt * 10f);
-_currentLookAt64 = Vector3d.Lerp(_currentLookAt64, _targetPos64, delta * 10.0);
-​double sinPhi = Math.Sin(_phi);
-Vector3d camPos64 = _currentLookAt64 + new Vector3d(
-_camRadius * sinPhi * Math.Sin(_theta),
-_camRadius * Math.Cos(_phi),
-_camRadius * sinPhi * Math.Cos(_theta)
-);
-​_camera.GlobalPosition = camPos64.ToVector3();
-_camera.LookAt(_currentLookAt64.ToVector3(), Vector3.Up);
-}
-​public void FocusOnBody(CosmicBodyNode node, double? customRadius = null)
-{
-if (node == null) return;
-_focusedNode = node;
-_multiverseLayer.Visible = node.Tier == CosmicTier.Multiverse;
-_universeLayer.Visible = node.Tier == CosmicTier.Universe;
-_galaxyLayer.Visible = node.Tier == CosmicTier.Galaxy;
-_systemLayer.Visible = node.Tier == CosmicTier.StarSystem || node.Tier == CosmicTier.Planet || node.Tier == CosmicTier.BlackHole;
-_surfaceLayer.Visible = node.Tier == CosmicTier.PlanetarySurface;
-​_targetPos64 = (node.Tier == CosmicTier.Multiverse || node.Tier == CosmicTier.Universe) ? node.LocalPos : Vector3d.Zero;
-_targetCamRadius = customRadius ?? (node.Tier switch
-{
-CosmicTier.Multiverse => 680.0,
-CosmicTier.Universe => 140.0,
-CosmicTier.Galaxy => 50.0,
-CosmicTier.StarSystem => 36.0,
-CosmicTier.BlackHole => 12.0,
-CosmicTier.Planet => 3.5,
-CosmicTier.PlanetarySurface => 8.0,
-_ => 50.0
-});
-RefreshHudUI();
-}
-​private void BuildFuturisticHudUI()
-{
-var canvas = new CanvasLayer();
-AddChild(canvas);
-​var topBar = new PanelContainer { AnchorLeft = 0f, AnchorRight = 1f, OffsetLeft = 16, OffsetTop = 12, OffsetRight = -16, OffsetBottom = 60 };
-canvas.AddChild(topBar);
-_tierBadgeLabel = new Label { Text = "TINYVERSE C# (.NET 8) • MULTIVERSE" };
-topBar.AddChild(_tierBadgeLabel);
-​var leftPanel = new PanelContainer { AnchorLeft = 0f, AnchorBottom = 1f, OffsetLeft = 16, OffsetTop = 72, OffsetRight = 310, OffsetBottom = -72 };
-canvas.AddChild(leftPanel);
-var leftScroll = new ScrollContainer();
-leftPanel.AddChild(leftScroll);
-_outlinerListContainer = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-leftScroll.AddChild(_outlinerListContainer);
-​var rightPanel = new PanelContainer { AnchorLeft = 1f, AnchorRight = 1f, AnchorBottom = 1f, OffsetLeft = -340, OffsetTop = 72, OffsetRight = -16, OffsetBottom = -72 };
-canvas.AddChild(rightPanel);
-var rightBox = new VBoxContainer();
-rightPanel.AddChild(rightBox);
-_telemetryTitleLabel = new Label { Text = "Object Telemetry", AutowrapMode = TextServer.AutowrapMode.WordSmart };
-_telemetryBodyLabel = new Label { Text = "", AutowrapMode = TextServer.AutowrapMode.WordSmart };
-rightBox.AddChild(_telemetryTitleLabel);
-rightBox.AddChild(_telemetryBodyLabel);
-​var bottomBar = new PanelContainer { AnchorLeft = 0f, AnchorTop = 1f, AnchorRight = 1f, AnchorBottom = 1f, OffsetLeft = 16, OffsetTop = -60, OffsetRight = -16, OffsetBottom = -12 };
-canvas.AddChild(bottomBar);
-var bottomRow = new HBoxContainer();
-bottomBar.AddChild(bottomRow);
-​var btnZoomIn = new Button { Text = "+ Zoom In" };
-btnZoomIn.Pressed += () => _targetCamRadius = Math.Max(0.5, _targetCamRadius * 0.7);
-bottomRow.AddChild(btnZoomIn);
-​var btnZoomOut = new Button { Text = "- Zoom Out" };
-btnZoomOut.Pressed += () => _targetCamRadius = Math.Min(2200.0, _targetCamRadius * 1.4);
-bottomRow.AddChild(btnZoomOut);
-​var btnParent = new Button { Text = "↑ Parent Tier" };
-btnParent.Pressed += () => { if (_focusedNode?.Parent != null) FocusOnBody(_focusedNode.Parent); };
-bottomRow.AddChild(btnParent);
-​_playPauseButton = new Button { Text = "⏸ Running" };
-_playPauseButton.Pressed += () =>
-{
-_simRunning = !_simRunning;
-_playPauseButton.Text = _simRunning ? "⏸ Running" : "▶ Paused";
-};
-bottomRow.AddChild(_playPauseButton);
-}
-​private void RefreshHudUI()
-{
-if (_focusedNode == null) return;
-_tierBadgeLabel.Text = $"TINYVERSE C# (.NET 8) • {_focusedNode.Tier.ToString().ToUpper()}";
-_telemetryTitleLabel.Text = $"{_focusedNode.Name}\n({_focusedNode.Subtitle})";
-_telemetryBodyLabel.Text = _focusedNode.TelemetrySummary;
-​foreach (Node child in _outlinerListContainer.GetChildren()) child.QueueFree();
-​var listSource = _focusedNode.Children.Count > 0
-? _focusedNode.Children
-: (_focusedNode.Parent != null ? _focusedNode.Parent.Children : _rootNode.Children);
-​foreach (var item in listSource)
-{
-var btn = new Button { Text = $"➔ {item.Name}", Alignment = HorizontalAlignment.Left };
-var captured = item;
-btn.Pressed += () => FocusOnBody(captured);
-_outlinerListContainer.AddChild(btn);
-}
-​if (_focusedNode.Tier == CosmicTier.Planet)
-{
-var surfBtn = new Button { Text = "🛰️ Land on Surface" };
-surfBtn.Pressed += () =>
-{
-_surfaceLayer.Visible = true;
-_systemLayer.Visible = false;
-_targetCamRadius = 8.0;
-_tierBadgeLabel.Text = "TINYVERSE C# (.NET 8) • PLANETARY SURFACE";
-};
-_outlinerListContainer.AddChild(surfBtn);
-}
-}
-}
-}
-EOF
-​- name: 6. Download Godot 4.3 .NET (C#) Compiler & Android Export Templates
-run: |
-wget -q https://github.com/godotengine/godot/releases/download/{GODOT_VERSION}-stable/Godot_v{GODOT_VERSION}-stable_mono_linux_x86_64.zip
-wget -q https://github.com/godotengine/godot/releases/download/{GODOT_VERSION}-stable/Godot_v{GODOT_VERSION}-stable_mono_export_templates.tpz
-unzip -q Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip
-mkdir -p ~/.local/share/godot/export_templates/{GODOT_VERSION}.stable.mono
-unzip -q Godot_v{GODOT_VERSION}-stable_mono_export_templates.tpz -d ~/.local/share/godot/export_templates/{GODOT_VERSION}.stable.mono
-mv ~/.local/share/godot/export_templates/{GODOT_VERSION}.stable.mono/templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono/
-​- name: 7. Configure Android Keystore & SDK in Both Export Presets and Editor Settings
-run: |
-keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
-SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-sed -i "s|custom_template/debug=""|custom_template/debug=""\nkeystore/debug="$PWD/debug.keystore"\nkeystore/debug_user="androiddebugkey"\nkeystore/debug_password="android"|g" export_presets.cfg
-mkdir -p ~/.config/godot
-cat << EOF > ~/.config/godot/editor_settings-4.tres
-[gd_resource type="EditorSettings" format=3]
-[resource]
-export/android/android_sdk_path = "$SDK_DIR"
-export/android/debug_keystore = "$PWD/debug.keystore"
-export/android/debug_keystore_user = "androiddebugkey"
-export/android/debug_keystore_pass = "android"
-EOF
-cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.3.tres
-​- name: 8. Compile C# (.NET 8) & Package Native ARM64 Android APK
-run: |
-dotnet build TinyverseCSharp.csproj -c Debug
-dotnet build TinyverseCSharp.csproj -c ExportDebug
-./Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64 --headless --export-debug "Android" build/Tinyverse-CSharp-ARM64.apk
-ls -lh build/Tinyverse-CSharp-ARM64.apk
-​- name: 9. Upload Compiled C# Android APK Artifact
-uses: actions/upload-artifact@v4
-with:
-name: Tinyverse-Pure-CSharp-Android-APK
-path: build/Tinyverse-CSharp-ARM64.apk
-retention-days: 90
+
+name: Build Tinyverse CSharp Android APK
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  build:
+    name: Build Tinyverse Android ARM64 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Prepare environment
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build packages
+        run: |
+          sdkmanager "platform-tools" \
+                     "platforms;android-34" \
+                     "build-tools;34.0.0"
+
+      # 2. Create project directories
+      - name: Generate Tinyverse project
+        shell: bash
+        run: |
+          mkdir -p Scripts/Core build
+
+          # Generate C# project
+          cat > TinyverseCSharp.csproj <<'EOF'
+          <Project Sdk="Godot.NET.Sdk/4.3.0">
+            <PropertyGroup>
+              <TargetFramework>net8.0</TargetFramework>
+              <EnableDynamicLoading>true</EnableDynamicLoading>
+              <Nullable>disable</Nullable>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+              <Optimize>true</Optimize>
+            </PropertyGroup>
+          </Project>
+          EOF
+
+          # Generate Godot project
+          cat > project.godot <<'EOF'
+          config_version=5
+
+          [application]
+          config/name="TINYVERSE - Cosmic Simulator"
+          run/main_scene="res://MainCosmos.tscn"
+          config/features=PackedStringArray("4.3", "C#", "Mobile")
+
+          [display]
+          window/size/viewport_width=1920
+          window/size/viewport_height=1080
+          window/stretch/mode="canvas_items"
+          window/stretch/aspect="expand"
+          window/handheld/orientation=0
+
+          [dotnet]
+          project/assembly_name="TinyverseCSharp"
+
+          [input_devices]
+          pointing/emulate_touch_from_mouse=true
+
+          [rendering]
+          renderer/rendering_method="mobile"
+          renderer/rendering_method.mobile="mobile"
+          environment/defaults/default_clear_color=Color(0.008,0.015,0.04,1)
+          anti_aliasing/quality/msaa_3d=2
+          EOF
+
+          # Generate main scene
+          cat > MainCosmos.tscn <<'EOF'
+          [gd_scene load_steps=2 format=3]
+
+          [ext_resource type="Script" path="res://Scripts/Core/TinyverseCSharpMain.cs" id="1"]
+
+          [node name="TinyverseRoot" type="Node3D"]
+          script = ExtResource("1")
+          EOF
+
+          # Generate Android export preset
+          cat > export_presets.cfg <<'EOF'
+          [preset.0]
+          name="Android"
+          platform="Android"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path="build/Tinyverse-ARM64.apk"
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          encrypt_pck=false
+          encrypt_directory=false
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          gradle_build/use_gradle_build=false
+          gradle_build/export_format=0
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+          package/unique_name="com.tinyverse.cosmos"
+          package/name="Tinyverse"
+          package/signed=true
+          package/version_code=1
+          package/version_name="1.0"
+          screen/immersive_mode=true
+          screen/orientation=0
+          permissions/internet=true
+          EOF
+
+      # 3. Generate 64-bit vector mathematics
+      - name: Generate Vector3d
+        run: |
+          cat > Scripts/Core/Vector3d.cs <<'EOF'
+          using System;
+          using Godot;
+
+          namespace TinyverseCSharp.Core
+          {
+              public struct Vector3d
+              {
+                  public double X, Y, Z;
+
+                  public Vector3d(double x, double y, double z)
+                  {
+                      X = x;
+                      Y = y;
+                      Z = z;
+                  }
+
+                  public static Vector3d Zero => new Vector3d(0, 0, 0);
+
+                  public double Length =>
+                      Math.Sqrt(X * X + Y * Y + Z * Z);
+
+                  public Vector3 ToVector3() =>
+                      new Vector3((float)X, (float)Y, (float)Z);
+
+                  public static Vector3d Lerp(Vector3d a, Vector3d b, double t)
+                  {
+                      t = Math.Clamp(t, 0, 1);
+                      return new Vector3d(
+                          a.X + (b.X - a.X) * t,
+                          a.Y + (b.Y - a.Y) * t,
+                          a.Z + (b.Z - a.Z) * t
+                      );
+                  }
+
+                  public static Vector3d operator +(Vector3d a, Vector3d b) =>
+                      new Vector3d(a.X + b.X, a.Y + b.Y, a.Z + b.Z);
+
+                  public static Vector3d operator -(Vector3d a, Vector3d b) =>
+                      new Vector3d(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
+
+                  public static Vector3d operator *(Vector3d a, double s) =>
+                      new Vector3d(a.X * s, a.Y * s, a.Z * s);
+              }
+          }
+          EOF
+
+      # 4. Generate the complete cosmic simulation
+      - name: Generate Tinyverse CSharp engine
+        run: |
+          cat > Scripts/Core/TinyverseCSharpMain.cs <<'EOF'
+          using System;
+          using System.Collections.Generic;
+          using Godot;
+
+          namespace TinyverseCSharp.Core
+          {
+              public partial class TinyverseCSharpMain : Node3D
+              {
+                  public enum CosmicTier
+                  {
+                      Multiverse,
+                      Universe,
+                      Galaxy,
+                      StarSystem,
+                      BlackHole,
+                      Planet,
+                      PlanetarySurface
+                  }
+
+                  public class CosmicBody
+                  {
+                      public string Id = "";
+                      public string Name = "";
+                      public string Description = "";
+                      public CosmicTier Tier;
+                      public Vector3d Position;
+                      public float Radius;
+                      public float OrbitRadius;
+                      public float OrbitSpeed;
+                      public float Angle;
+                      public Color Primary = Colors.White;
+                      public Color Secondary = Colors.White;
+                      public string Telemetry = "";
+                      public Node3D Visual;
+                      public CosmicBody Parent;
+                      public List<CosmicBody> Children = new();
+                  }
+
+                  private Camera3D camera;
+                  private Node3D multiverseLayer;
+                  private Node3D universeLayer;
+                  private Node3D galaxyLayer;
+                  private Node3D systemLayer;
+                  private Node3D surfaceLayer;
+
+                  private CosmicBody root;
+                  private CosmicBody focused;
+
+                  private readonly Dictionary<string, CosmicBody> bodies = new();
+                  private readonly List<CosmicBody> orbiting = new();
+
+                  private Vector3d target = Vector3d.Zero;
+                  private Vector3d current = Vector3d.Zero;
+
+                  private double distance = 680;
+                  private double targetDistance = 680;
+
+                  private float theta = 0.45f;
+                  private float phi = 1.18f;
+                  private float targetTheta = 0.45f;
+                  private float targetPhi = 1.18f;
+
+                  private bool running = true;
+                  private bool dragging;
+                  private float lastPinch;
+
+                  private readonly Dictionary<int, Vector2> touches = new();
+
+                  private Label titleLabel;
+                  private Label infoLabel;
+                  private Label tierLabel;
+                  private VBoxContainer list;
+                  private Button pauseButton;
+
+                  public override void _Ready()
+                  {
+                      SetupScene();
+                      CreateDatabase();
+                      CreateCosmos();
+                      CreateInterface();
+                      Focus(root, 680);
+                  }
+
+                  private void SetupScene()
+                  {
+                      var environment = new WorldEnvironment();
+                      environment.Environment = new Godot.Environment
+                      {
+                          BackgroundMode = Godot.Environment.BGMode.Color,
+                          BackgroundColor = new Color(0.008f, 0.015f, 0.04f),
+                          AmbientLightSource = Godot.Environment.AmbientSource.Color,
+                          AmbientLightColor = new Color(0.3f, 0.35f, 0.5f),
+                          AmbientLightEnergy = 1.0f
+                      };
+                      AddChild(environment);
+
+                      camera = new Camera3D
+                      {
+                          Fov = 55,
+                          Near = 0.05f,
+                          Far = 8000
+                      };
+                      AddChild(camera);
+
+                      var light = new DirectionalLight3D
+                      {
+                          LightEnergy = 2
+                      };
+                      light.RotationDegrees = new Vector3(-25, 35, 0);
+                      AddChild(light);
+
+                      multiverseLayer = new Node3D();
+                      universeLayer = new Node3D();
+                      galaxyLayer = new Node3D();
+                      systemLayer = new Node3D();
+                      surfaceLayer = new Node3D();
+
+                      AddChild(multiverseLayer);
+                      AddChild(universeLayer);
+                      AddChild(galaxyLayer);
+                      AddChild(systemLayer);
+                      AddChild(surfaceLayer);
+                  }
+
+                  private void AddBody(CosmicBody body, CosmicBody parent)
+                  {
+                      body.Parent = parent;
+                      parent?.Children.Add(body);
+                      bodies[body.Id] = body;
+                  }
+
+                  private void CreateDatabase()
+                  {
+                      root = new CosmicBody
+                      {
+                          Id = "multiverse",
+                          Name = "The Omni Multiverse",
+                          Description = "Higher-dimensional cosmic structure",
+                          Tier = CosmicTier.Multiverse,
+                          Radius = 400,
+                          Primary = new Color(0.2f, 0.7f, 1),
+                          Telemetry = "MULTIVERSE\nMultiple independent universes\nHypothetical cosmological model"
+                      };
+                      AddBody(root, null);
+
+                      var alpha = new CosmicBody
+                      {
+                          Id = "alpha",
+                          Name = "Universe Alpha",
+                          Description = "Standard Lambda-CDM universe",
+                          Tier = CosmicTier.Universe,
+                          Position = new Vector3d(-220, 20, 40),
+                          Radius = 85,
+                          Primary = new Color(0.2f, 0.7f, 1),
+                          Secondary = new Color(0.5f, 0.5f, 1),
+                          Telemetry = "UNIVERSE ALPHA\nAge: approximately 13.8 billion years\nDiameter: approximately 93 billion light-years"
+                      };
+                      AddBody(alpha, root);
+
+                      var hyperion = new CosmicBody
+                      {
+                          Id = "hyperion",
+                          Name = "Universe Hyperion",
+                          Description = "Hypothetical high-gravity universe",
+                          Tier = CosmicTier.Universe,
+                          Position = new Vector3d(20, 95, -210),
+                          Radius = 80,
+                          Primary = new Color(1, 0.5f, 0.1f),
+                          Secondary = new Color(1, 0.2f, 0.5f),
+                          Telemetry = "HYPOTHETICAL UNIVERSE\nGravity: 2.8x standard model"
+                      };
+                      AddBody(hyperion, root);
+
+                      var chronos = new CosmicBody
+                      {
+                          Id = "chronos",
+                          Name = "Universe Chronos",
+                          Description = "Hypothetical alternate cosmos",
+                          Tier = CosmicTier.Universe,
+                          Position = new Vector3d(220, -40, 60),
+                          Radius = 82,
+                          Primary = new Color(0.6f, 0.3f, 1),
+                          Secondary = new Color(0.1f, 0.9f, 0.7f),
+                          Telemetry = "HYPOTHETICAL UNIVERSE\nAlternate cosmic evolution"
+                      };
+                      AddBody(chronos, root);
+
+                      var galaxy = new CosmicBody
+                      {
+                          Id = "milkyway",
+                          Name = "Milky Way Galaxy",
+                          Description = "Barred spiral galaxy",
+                          Tier = CosmicTier.Galaxy,
+                          Position = new Vector3d(-32, 5, 14),
+                          Radius = 25,
+                          Primary = new Color(0.4f, 0.7f, 1),
+                          Secondary = new Color(1, 0.9f, 0.7f),
+                          Telemetry = "MILKY WAY\nDiameter: approximately 105,700 light-years\nStars: estimated 100-400 billion"
+                      };
+                      AddBody(galaxy, alpha);
+
+                      var blackHole = new CosmicBody
+                      {
+                          Id = "sgr_a",
+                          Name = "Sagittarius A*",
+                          Description = "Supermassive black hole",
+                          Tier = CosmicTier.BlackHole,
+                          Radius = 2.6f,
+                          Primary = new Color(1, 0.4f, 0.1f),
+                          Secondary = Colors.White,
+                          Telemetry = "SUPERMASSIVE BLACK HOLE\nMass: approximately 4.3 million solar masses\nEvent horizon and accretion disk"
+                      };
+                      AddBody(blackHole, galaxy);
+
+                      var solar = new CosmicBody
+                      {
+                          Id = "solar",
+                          Name = "Solar System",
+                          Description = "G2V yellow dwarf star system",
+                          Tier = CosmicTier.StarSystem,
+                          Position = new Vector3d(14, 1.5, 9),
+                          Radius = 3.2f,
+                          Primary = new Color(1, 0.85f, 0.25f),
+                          Secondary = new Color(1, 0.4f, 0.1f),
+                          Telemetry = "SOLAR SYSTEM\nCentral star: Sun\nSpectral type: G2V"
+                      };
+                      AddBody(solar, galaxy);
+
+                      var earth = new CosmicBody
+                      {
+                          Id = "earth",
+                          Name = "Earth",
+                          Description = "Rocky ocean planet",
+                          Tier = CosmicTier.Planet,
+                          Radius = 0.85f,
+                          OrbitRadius = 11,
+                          OrbitSpeed = 0.55f,
+                          Angle = 0.8f,
+                          Primary = new Color(0.05f, 0.4f, 0.8f),
+                          Secondary = new Color(0.1f, 0.7f, 0.3f),
+                          Telemetry = "EARTH\nDiameter: 12,742 km\nGravity: 9.807 m/s2\nOrbital period: 365.256 days"
+                      };
+                      AddBody(earth, solar);
+                      orbiting.Add(earth);
+
+                      var saturn = new CosmicBody
+                      {
+                          Id = "saturn",
+                          Name = "Saturn",
+                          Description = "Ringed gas giant",
+                          Tier = CosmicTier.Planet,
+                          Radius = 1.45f,
+                          OrbitRadius = 22,
+                          OrbitSpeed = 0.20f,
+                          Angle = 4.9f,
+                          Primary = new Color(0.9f, 0.7f, 0.3f),
+                          Secondary = new Color(1, 0.9f, 0.6f),
+                          Telemetry = "SATURN\nDiameter: 116,460 km\nGas giant with prominent rings"
+                      };
+                      AddBody(saturn, solar);
+                      orbiting.Add(saturn);
+
+                      var mars = new CosmicBody
+                      {
+                          Id = "mars",
+                          Name = "Mars",
+                          Description = "Red terrestrial planet",
+                          Tier = CosmicTier.Planet,
+                          Radius = 0.65f,
+                          OrbitRadius = 16,
+                          OrbitSpeed = 0.35f,
+                          Angle = 2.2f,
+                          Primary = new Color(0.8f, 0.2f, 0.1f),
+                          Secondary = new Color(0.9f, 0.5f, 0.3f),
+                          Telemetry = "MARS\nDiameter: 6,779 km\nThe Red Planet"
+                      };
+                      AddBody(mars, solar);
+                      orbiting.Add(mars);
+
+                      var jupiter = new CosmicBody
+                      {
+                          Id = "jupiter",
+                          Name = "Jupiter",
+                          Description = "Largest gas giant",
+                          Tier = CosmicTier.Planet,
+                          Radius = 1.8f,
+                          OrbitRadius = 29,
+                          OrbitSpeed = 0.12f,
+                          Angle = 3.5f,
+                          Primary = new Color(0.75f, 0.5f, 0.3f),
+                          Secondary = new Color(0.95f, 0.8f, 0.6f),
+                          Telemetry = "JUPITER\nDiameter: 139,820 km\nLargest planet in the Solar System"
+                      };
+                      AddBody(jupiter, solar);
+                      orbiting.Add(jupiter);
+                  }
+
+                  private MeshInstance3D Sphere(float radius, Color color, bool glow)
+                  {
+                      var mesh = new MeshInstance3D
+                      {
+                          Mesh = new SphereMesh
+                          {
+                              Radius = radius,
+                              Height = radius * 2,
+                              RadialSegments = 24,
+                              Rings = 16
+                          }
+                      };
+
+                      var material = new StandardMaterial3D
+                      {
+                          AlbedoColor = color,
+                          Roughness = 0.6f,
+                          EmissionEnabled = glow,
+                          Emission = color,
+                          EmissionEnergyMultiplier = glow ? 2.0f : 0.0f
+                      };
+
+                      mesh.MaterialOverride = material;
+                      return mesh;
+                  }
+
+                  private Node3D GlowingSphere(float radius, Color color)
+                  {
+                      var node = new Node3D();
+                      node.AddChild(Sphere(radius, color, true));
+                      return node;
+                  }
+
+                  private Node3D BlackHole(float radius)
+                  {
+                      var node = new Node3D();
+
+                      var horizon = Sphere(radius, Colors.Black, false);
+                      horizon.MaterialOverride = new StandardMaterial3D
+                      {
+                          ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                          AlbedoColor = Colors.Black
+                      };
+                      node.AddChild(horizon);
+
+                      var disk = new MeshInstance3D
+                      {
+                          Mesh = new TorusMesh
+                          {
+                              InnerRadius = radius * 1.35f,
+                              OuterRadius = radius * 4.2f
+                          },
+                          Scale = new Vector3(1, 0.09f, 1)
+                      };
+
+                      disk.MaterialOverride = new StandardMaterial3D
+                      {
+                          AlbedoColor = new Color(1, 0.45f, 0.1f),
+                          EmissionEnabled = true,
+                          Emission = new Color(1, 0.3f, 0.05f),
+                          EmissionEnergyMultiplier = 3
+                      };
+
+                      node.AddChild(disk);
+                      return node;
+                  }
+
+                  private Node3D GenerateGalaxy(CosmicBody body, int count)
+                  {
+                      var container = new Node3D();
+                      var instance = new MultiMeshInstance3D();
+
+                      var multi = new MultiMesh
+                      {
+                          TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+                          UseColors = true,
+                          InstanceCount = count,
+                          Mesh = new SphereMesh
+                          {
+                              Radius = 0.08f,
+                              Height = 0.16f,
+                              RadialSegments = 4,
+                              Rings = 2
+                          }
+                      };
+
+                      instance.MaterialOverride = new StandardMaterial3D
+                      {
+                          ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+                          VertexColorUseAsAlbedo = true
+                      };
+
+                      var random = new Random(body.Id.GetHashCode());
+
+                      for (int i = 0; i < count; i++)
+                      {
+                          float rNorm = Mathf.Pow((float)random.NextDouble(), 1.35f);
+                          float r = rNorm * body.Radius;
+
+                          float arm = (i % 4) * Mathf.Pi * 0.5f;
+                          float angle = arm + r * 0.26f +
+                              ((float)random.NextDouble() - 0.5f) * 0.65f;
+
+                          float y = ((float)random.NextDouble() - 0.5f) *
+                              (1 - rNorm * 0.75f) * body.Radius * 0.14f;
+
+                          var position = new Vector3(
+                              Mathf.Cos(angle) * r,
+                              y,
+                              Mathf.Sin(angle) * r
+                          );
+
+                          multi.SetInstanceTransform(
+                              i,
+                              new Transform3D(Basis.Identity, position)
+                          );
+
+                          multi.SetInstanceColor(
+                              i,
+                              body.Secondary.Lerp(body.Primary, rNorm)
+                          );
+                      }
+
+                      instance.Multimesh = multi;
+                      container.AddChild(instance);
+                      return container;
+                  }
+
+                  private void CreateCosmos()
+                  {
+                      foreach (var universe in root.Children)
+                      {
+                          var visual = GlowingSphere(
+                              universe.Radius,
+                              universe.Primary
+                          );
+                          visual.Position = universe.Position.ToVector3();
+                          multiverseLayer.AddChild(visual);
+                          universe.Visual = visual;
+                      }
+
+                      var alpha = bodies["alpha"];
+
+                      foreach (var galaxy in alpha.Children)
+                      {
+                          var visual = GenerateGalaxy(galaxy, 12000);
+                          visual.Position = galaxy.Position.ToVector3();
+                          universeLayer.AddChild(visual);
+                          galaxy.Visual = visual;
+                      }
+
+                      var mw = bodies["milkyway"];
+
+                      galaxyLayer.AddChild(GenerateGalaxy(mw, 18000));
+
+                      foreach (var item in mw.Children)
+                      {
+                          Node3D visual;
+
+                          if (item.Tier == CosmicTier.BlackHole)
+                              visual = BlackHole(item.Radius);
+                          else
+                              visual = GlowingSphere(item.Radius, item.Primary);
+
+                          visual.Position = item.Position.ToVector3();
+                          galaxyLayer.AddChild(visual);
+                          item.Visual = visual;
+                      }
+
+                      var sun = bodies["solar"];
+                      var sunVisual = GlowingSphere(sun.Radius, sun.Primary);
+                      systemLayer.AddChild(sunVisual);
+                      sun.Visual = sunVisual;
+
+                      foreach (var planet in sun.Children)
+                      {
+                          var group = new Node3D();
+                          group.AddChild(Sphere(planet.Radius, planet.Primary, false));
+
+                          systemLayer.AddChild(group);
+                          planet.Visual = group;
+                      }
+
+                      var ground = new MeshInstance3D
+                      {
+                          Mesh = new PlaneMesh
+                          {
+                              Size = new Vector2(180, 180),
+                              SubdivideWidth = 64,
+                              SubdivideDepth = 64
+                          }
+                      };
+
+                      ground.MaterialOverride = new StandardMaterial3D
+                      {
+                          AlbedoColor = new Color(0.08f, 0.4f, 0.2f)
+                      };
+
+                      surfaceLayer.AddChild(ground);
+                  }
+
+                  public void Focus(CosmicBody body, double? zoom = null)
+                  {
+                      if (body == null)
+                          return;
+
+                      focused = body;
+
+                      multiverseLayer.Visible = body.Tier == CosmicTier.Multiverse;
+                      universeLayer.Visible = body.Tier == CosmicTier.Universe;
+                      galaxyLayer.Visible = body.Tier == CosmicTier.Galaxy ||
+                          body.Tier == CosmicTier.BlackHole;
+                      systemLayer.Visible = body.Tier == CosmicTier.StarSystem ||
+                          body.Tier == CosmicTier.Planet;
+                      surfaceLayer.Visible = body.Tier == CosmicTier.PlanetarySurface;
+
+                      if (body.Tier == CosmicTier.Multiverse ||
+                          body.Tier == CosmicTier.Universe)
+                          target = body.Position;
+                      else if (body.Tier == CosmicTier.Planet && body.Visual != null)
+                      {
+                          Vector3 p = body.Visual.Position;
+                          target = new Vector3d(p.X, p.Y, p.Z);
+                      }
+                      else
+                          target = Vector3d.Zero;
+
+                      targetDistance = zoom ?? body.Tier switch
+                      {
+                          CosmicTier.Multiverse => 680,
+                          CosmicTier.Universe => 140,
+                          CosmicTier.Galaxy => 50,
+                          CosmicTier.StarSystem => 36,
+                          CosmicTier.BlackHole => 12,
+                          CosmicTier.Planet => 3.5,
+                          CosmicTier.PlanetarySurface => 8,
+                          _ => 50
+                      };
+
+                      UpdateInterface();
+                  }
+
+                  private void CreateInterface()
+                  {
+                      var canvas = new CanvasLayer();
+                      AddChild(canvas);
+
+                      var top = new PanelContainer
+                      {
+                          AnchorRight = 1,
+                          OffsetLeft = 12,
+                          OffsetTop = 10,
+                          OffsetRight = -12,
+                          OffsetBottom = 54
+                      };
+                      canvas.AddChild(top);
+
+                      tierLabel = new Label
+                      {
+                          Text = "TINYVERSE  |  MULTIVERSE"
+                      };
+                      top.AddChild(tierLabel);
+
+                      var left = new PanelContainer
+                      {
+                          AnchorBottom = 1,
+                          OffsetLeft = 12,
+                          OffsetTop = 65,
+                          OffsetRight = 285,
+                          OffsetBottom = -65
+                      };
+                      canvas.AddChild(left);
+
+                      var scroll = new ScrollContainer();
+                      left.AddChild(scroll);
+
+                      list = new VBoxContainer
+                      {
+                          SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+                      };
+                      scroll.AddChild(list);
+
+                      var right = new PanelContainer
+                      {
+                          AnchorLeft = 1,
+                          AnchorRight = 1,
+                          AnchorBottom = 1,
+                          OffsetLeft = -310,
+                          OffsetTop = 65,
+                          OffsetRight = -12,
+                          OffsetBottom = -65
+                      };
+                      canvas.AddChild(right);
+
+                      var info = new VBoxContainer();
+                      right.AddChild(info);
+
+                      titleLabel = new Label
+                      {
+                          Text = "Cosmic Telemetry",
+                          AutowrapMode = TextServer.AutowrapMode.WordSmart
+                      };
+
+                      infoLabel = new Label
+                      {
+                          Text = "",
+                          AutowrapMode = TextServer.AutowrapMode.WordSmart
+                      };
+
+                      info.AddChild(titleLabel);
+                      info.AddChild(infoLabel);
+
+                      var bottom = new PanelContainer
+                      {
+                          AnchorTop = 1,
+                          AnchorRight = 1,
+                          AnchorBottom = 1,
+                          OffsetLeft = 12,
+                          OffsetTop = -55,
+                          OffsetRight = -12,
+                          OffsetBottom = -10
+                      };
+                      canvas.AddChild(bottom);
+
+                      var row = new HBoxContainer();
+                      bottom.AddChild(row);
+
+                      var zoomIn = new Button { Text = "+ Zoom" };
+                      zoomIn.Pressed += () =>
+                          targetDistance = Math.Max(0.5, targetDistance * 0.7);
+                      row.AddChild(zoomIn);
+
+                      var zoomOut = new Button { Text = "- Zoom" };
+                      zoomOut.Pressed += () =>
+                          targetDistance = Math.Min(2200, targetDistance * 1.4);
+                      row.AddChild(zoomOut);
+
+                      var parent = new Button { Text = "↑ Parent" };
+                      parent.Pressed += () =>
+                      {
+                          if (focused?.Parent != null)
+                              Focus(focused.Parent);
+                      };
+                      row.AddChild(parent);
+
+                      pauseButton = new Button { Text = "II Pause" };
+                      pauseButton.Pressed += () =>
+                      {
+                          running = !running;
+                          pauseButton.Text = running ? "II Pause" : "▶ Play";
+                      };
+                      row.AddChild(pauseButton);
+                  }
+
+                  private void UpdateInterface()
+                  {
+                      if (focused == null)
+                          return;
+
+                      tierLabel.Text = "TINYVERSE  |  " +
+                          focused.Tier.ToString().ToUpperInvariant();
+
+                      titleLabel.Text = focused.Name +
+                          "\n" + focused.Description;
+
+                      infoLabel.Text = focused.Telemetry;
+
+                      foreach (Node child in list.GetChildren())
+                          child.QueueFree();
+
+                      var source = focused.Children.Count > 0
+                          ? focused.Children
+                          : focused.Parent != null
+                              ? focused.Parent.Children
+                              : root.Children;
+
+                      foreach (var body in source)
+                      {
+                          var button = new Button
+                          {
+                              Text = "➜ " + body.Name,
+                              Alignment = HorizontalAlignment.Left
+                          };
+
+                          var captured = body;
+                          button.Pressed += () => Focus(captured);
+                          list.AddChild(button);
+                      }
+
+                      if (focused.Tier == CosmicTier.Planet)
+                      {
+                          var land = new Button
+                          {
+                              Text = "Land on Planet Surface"
+                          };
+
+                          land.Pressed += () =>
+                          {
+                              surfaceLayer.Visible = true;
+                              systemLayer.Visible = false;
+                              focused = new CosmicBody
+                              {
+                                  Name = focused.Name + " Surface",
+                                  Description = "Planetary surface view",
+                                  Tier = CosmicTier.PlanetarySurface,
+                                  Telemetry = "SURFACE EXPLORATION\nTerrain visualization"
+                              };
+                              target = Vector3d.Zero;
+                              targetDistance = 8;
+                              UpdateInterface();
+                          };
+
+                          list.AddChild(land);
+                      }
+                  }
+
+                  public override void _Input(InputEvent e)
+                  {
+                      if (e is InputEventScreenTouch touch)
+                      {
+                          if (touch.Pressed)
+                              touches[touch.Index] = touch.Position;
+                          else
+                              touches.Remove(touch.Index);
+
+                          lastPinch = 0;
+                      }
+                      else if (e is InputEventScreenDrag drag)
+                      {
+                          touches[drag.Index] = drag.Position;
+
+                          if (touches.Count == 1)
+                          {
+                              targetTheta -= drag.Relative.X * 0.006f;
+                              targetPhi = Mathf.Clamp(
+                                  targetPhi - drag.Relative.Y * 0.006f,
+                                  0.12f,
+                                  Mathf.Pi - 0.12f
+                              );
+                          }
+                          else if (touches.Count >= 2)
+                          {
+                              var points = new List<Vector2>(touches.Values);
+                              float d = points[0].DistanceTo(points[1]);
+
+                              if (lastPinch > 5)
+                                  targetDistance = Math.Clamp(
+                                      targetDistance * lastPinch /
+                                      Math.Max(10, d), 0.5, 2200
+                                  );
+
+                              lastPinch = d;
+                          }
+                      }
+                      else if (e is InputEventMouseButton mouse)
+                      {
+                          if (mouse.ButtonIndex == MouseButton.Left)
+                              dragging = mouse.Pressed;
+
+                          if (mouse.Pressed &&
+                              mouse.ButtonIndex == MouseButton.WheelUp)
+                              targetDistance = Math.Max(0.5, targetDistance * 0.85);
+
+                          if (mouse.Pressed &&
+                              mouse.ButtonIndex == MouseButton.WheelDown)
+                              targetDistance = Math.Min(2200, targetDistance * 1.18);
+                      }
+                      else if (e is InputEventMouseMotion motion && dragging)
+                      {
+                          targetTheta -= motion.Relative.X * 0.006f;
+                          targetPhi = Mathf.Clamp(
+                              targetPhi - motion.Relative.Y * 0.006f,
+                              0.12f,
+                              Mathf.Pi - 0.12f
+                          );
+                      }
+                  }
+
+                  public override void _Process(double delta)
+                  {
+                      float dt = (float)delta;
+
+                      if (running)
+                      {
+                          foreach (var planet in orbiting)
+                          {
+                              planet.Angle += planet.OrbitSpeed * dt;
+
+                              if (planet.Visual != null)
+                              {
+                                  planet.Visual.Position = new Vector3(
+                                      Mathf.Cos(planet.Angle) * planet.OrbitRadius,
+                                      0,
+                                      Mathf.Sin(planet.Angle) * planet.OrbitRadius
+                                  );
+                              }
+                          }
+                      }
+
+                      distance += (targetDistance - distance) *
+                          Math.Min(1, delta * 8);
+
+                      theta = Mathf.Lerp(theta, targetTheta, dt * 10);
+                      phi = Mathf.Lerp(phi, targetPhi, dt * 10);
+
+                      current = Vector3d.Lerp(current, target, delta * 10);
+
+                      double sin = Math.Sin(phi);
+
+                      Vector3d cameraPosition = current + new Vector3d(
+                          distance * sin * Math.Sin(theta),
+                          distance * Math.Cos(phi),
+                          distance * sin * Math.Cos(theta)
+                      );
+
+                      camera.GlobalPosition = cameraPosition.ToVector3();
+                      camera.LookAt(current.ToVector3(), Vector3.Up);
+                  }
+              }
+          }
+          EOF
+
+      # 5. Download Godot 4.3 .NET editor and templates
+      - name: Download Godot .NET
+        run: |
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz"
+
+          unzip -q "Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono"
+
+          mkdir -p /tmp/godot-templates
+
+          unzip -q "Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz" \
+            -d /tmp/godot-templates
+
+          mv /tmp/godot-templates/templates/* \
+            "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono/"
+
+      # 6. Create signing keystore and configure Godot
+      - name: Configure Android signing
+        run: |
+          keytool -genkeypair \
+            -v \
+            -keystore "$GITHUB_WORKSPACE/debug.keystore" \
+            -storetype JKS \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 9999 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          mkdir -p "$HOME/.config/godot"
+
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$GITHUB_WORKSPACE/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+
+          cat >> export_presets.cfg <<EOF
+          keystore/debug="$GITHUB_WORKSPACE/debug.keystore"
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
+          EOF
+
+      # 7. Restore and compile C#
+      - name: Restore and compile CSharp
+        run: |
+          dotnet restore TinyverseCSharp.csproj
+          dotnet build TinyverseCSharp.csproj -c Debug --no-restore
+
+      # 8. Import Godot project and export APK
+      - name: Export Android ARM64 APK
+        run: |
+          GODOT="./Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64"
+
+          chmod +x "$GODOT"
+
+          "$GODOT" --headless --editor --path "$GITHUB_WORKSPACE" --import
+
+          "$GODOT" --headless \
+            --path "$GITHUB_WORKSPACE" \
+            --export-debug "Android" \
+            "$GITHUB_WORKSPACE/build/Tinyverse-ARM64.apk"
+
+          test -s build/Tinyverse-ARM64.apk
+          ls -lh build/Tinyverse-ARM64.apk
+
+      # 9. Upload APK
+      - name: Upload Tinyverse APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tinyverse-Android-ARM64-APK
+          path: build/Tinyverse-ARM64.apk
+          if-no-files-found: error
+          retention-days: 90
