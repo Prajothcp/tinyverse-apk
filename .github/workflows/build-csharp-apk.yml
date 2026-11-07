@@ -1,0 +1,70 @@
+name: Build Pure C# Tinyverse Android APK (.NET 8 + Godot 4 C#)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  compile-csharp-apk:
+    name: Compile C# (.NET 8) to Native Android ARM64 APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout C# Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Install Microsoft .NET 8.0 C# SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: 3. Install JDK 17 & Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 4. Setup Android SDK Command-Line Tools
+        uses: android-actions/setup-android@v3
+
+      - name: 5. Download Godot 4.3 .NET (C#) Compiler & Android Export Templates
+        run: |
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip
+          wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz
+          unzip -q Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono
+          unzip -q Godot_v${GODOT_VERSION}-stable_mono_export_templates.tpz -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono
+          mv ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono/templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable.mono/
+
+      - name: 6. Generate Android Debug Keystore & Configure SDK Path
+        run: |
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          mkdir -p ~/.config/godot
+          cat << 'EOF' > ~/.config/godot/editor_settings-4.tres
+          [gd_resource type="EditorSettings" format=3]
+          [resource]
+          export/android/android_sdk_path = "/usr/local/lib/android/sdk"
+          export/android/debug_keystore = "$PWD/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+          sed -i "s|\$PWD|$PWD|g" ~/.config/godot/editor_settings-4.tres
+
+      - name: 7. Compile C# (.csproj) & Export Native ARM64 Android APK
+        run: |
+          mkdir -p build
+          dotnet restore TinyverseCSharp.csproj
+          ./Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64/Godot_v${GODOT_VERSION}-stable_mono_linux.x86_64 --headless --verbose --export-debug "Android" build/Tinyverse-CSharp-ARM64.apk
+          ls -lh build/Tinyverse-CSharp-ARM64.apk
+
+      - name: 8. Upload Compiled C# Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tinyverse-Pure-CSharp-Android-APK
+          path: build/Tinyverse-CSharp-ARM64.apk
+          retention-days: 90
+          
