@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://tinyverse_csharp_main"]
+
+[ext_resource type="Script" path="res://Scripts/Core/TinyverseCSharpMain.cs" id="1_csmain"]
+
+[node name="TinyverseRoot" type="Node3D"]
+script = ExtResource("1_csmain")
