@@ -22,3 +22,7 @@ pointing/emulate_touch_from_mouse=true
 [rendering]
 renderer/rendering_method="mobile"
 anti_aliasing/quality/msaa_3d=2
+
+[resource]
+export/android/android_sdk_path = "/usr/local/lib/android/sdk"
+export/android/java_sdk_path = "/opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.*/x64"
